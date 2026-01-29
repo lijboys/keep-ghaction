@@ -1,207 +1,120 @@
-🤖 GitHub Action 保活助手 (Cloudflare Worker 版)
+# 🤖 GitHub Action 保活助手 (Cloudflare Worker 版)
+一款部署在 **Cloudflare Workers** 上的轻量脚本，专门解决 GitHub Action 定时任务因**60天无活动**被自动暂停的问题，全程利用免费资源，无需额外服务器。
 
-这是一个部署在 Cloudflare Workers 上的脚本，用于防止 GitHub Action 定时任务因 60 天无活动而被自动暂停。
+## ✨ 核心特性
+- 🛡 **精准防暂停**：调用 GitHub 官方 API 手动触发 Workflow，模拟真实活跃行为，合规有效
+- 🎲 **随机触发间隔**：支持自定义天数区间（默认40-60天），避免固定规律触发，更贴近真人操作
+- 📱 **Telegram 实时通知**：推送脚本运行报告、保活结果及下一次预计运行时间，状态一手掌握
+- 💰 **零成本运行**：完全消耗 Cloudflare 免费额度（每日10万次请求），无任何费用支出
+- 📝 **轻量低耗**：仅在触发时间执行真实请求，其余时间仅做轻量时间检查，资源占用可忽略
 
-✨ 主要特性
+## 🛠 第一步：准备 GitHub 核心信息
+部署前需获取2个关键信息，用于脚本鉴权和指定保活项目。
 
-防暂停：通过调用 GitHub API 手动触发 Workflow，模拟活跃状态。
+### 1. 获取 GitHub 个人访问令牌（Token）
+脚本需通过该 Token 获取触发 Workflow 的权限，步骤如下：
+1. 登录 GitHub，点击头像 → **Settings**
+2. 左侧菜单栏最下方 → **Developer settings**
+3. 选择 **Personal access tokens** → **Tokens (classic)**
+4. 点击 **Generate new token (classic)**
+5. **Note**：自定义名称（例：`CF-KeepAlive`），便于识别
+6. **Expiration**：建议选择 **No expiration**（永不过期），避免后续重复配置
+7. **Select scopes**（权限勾选，二选一）：
+   - 公开仓库：勾选 `public_repo` + `workflow`
+   - 私有仓库：勾选 `repo`（包含所有仓库权限） + `workflow`
+8. 点击 **Generate token**，复制生成的**ghp_开头**字符串，妥善保存（仅显示一次）
 
-随机间隔：支持设置随机时间区间（如 40-60 天），避免规律性触发被检测，更像真人操作。
+### 2. 整理保活项目 JSON 列表
+将需要保活的 GitHub 项目按指定格式整理为 JSON 数组，**需保证格式合法**。
+#### 格式说明
+| 字段     | 说明                     | 示例       |
+|----------|--------------------------|------------|
+| `owner`  | GitHub 用户名/组织名     | `testUser` |
+| `repo`   | 仓库名称                 | `my-project` |
+| `workflow` | Workflow 配置文件名    | `main.yml` |
+| `ref`    | 分支名称（通常main/master） | `main` |
 
-TG 通知：支持 Telegram 消息推送，发送运行报告和下一次预计运行时间。
-
-低成本：完全利用 Cloudflare 免费额度（每天 10 万次请求），且不需要服务器。
-
-🛠 第一步：准备 GitHub 信息
-
-在部署之前，你需要获取以下两个核心信息：
-
-1. 获取 GitHub Token (个人访问令牌)
-
-脚本需要权限来触发你的 Workflow。
-
-登录 GitHub，点击头像 -> Settings。
-
-左侧菜单最下方 -> Developer settings。
-
-点击 Personal access tokens -> Tokens (classic)。
-
-点击 Generate new token (classic)。
-
-Note 随便填（例如：CF-KeepAlive）。
-
-Expiration (过期时间) 建议选择 No expiration (永不过期)，否则你以后还得换。
-
-Select scopes (权限选择)：
-
-如果是公开仓库：勾选 public_repo 和 workflow。
-
-如果是私有仓库：勾选 repo (包含所有权限) 和 workflow。
-
-点击 Generate token，复制生成的 ghp_ 开头的字符串。这是你的 TOKEN。
-
-2. 整理需要保活的项目列表
-
-你需要把要保活的项目整理成 JSON 格式。
-
-格式说明：
-
-owner: 你的 GitHub 用户名
-
-repo: 仓库名称
-
-workflow: .github/workflows/ 目录下的 .yml 文件名
-
-ref: 分支名称 (通常是 main 或 master)
-
-JSON 模板 (复制修改)：
-
+#### JSON 模板（直接复制修改）
+```json
 [
   {
-    "owner": "你的用户名",
-    "repo": "仓库A",
+    "owner": "你的GitHub用户名",
+    "repo": "仓库A名称",
     "workflow": "main.yml",
     "ref": "main"
   },
   {
-    "owner": "你的用户名",
-    "repo": "仓库B",
+    "owner": "你的GitHub用户名",
+    "repo": "仓库B名称",
     "workflow": "schedule.yml",
     "ref": "master"
   }
 ]
-
-
-提示：建议先在电脑上的记事本里把这个 JSON 拼好，压缩成一行，方便后面粘贴。
-
-☁️ 第二步：部署 Cloudflare Worker
-
-1. 创建 Worker
-
-登录 Cloudflare Dashboard。
-
-左侧菜单点击 Workers & Pages。
-
-点击 Create Application -> Create Worker -> Deploy。
-
-点击 Edit code。
-
-将提供的 worker.js 代码完全复制并覆盖编辑器中的默认代码。
-
-点击右上角 Deploy 保存。
-
-2. 创建 KV 存储 (用于随机时间记忆)
-
-为了实现“40-60天随机运行”，我们需要一个地方存“下一次运行时间”。
-
-在 Cloudflare 左侧主菜单，找到 Storage & Databases -> KV。
-
-点击 Create Namespace。
-
-起个名字，例如 KEEP_ALIVE_DB，点击 Add。
-
-3. 配置环境变量 (Variables) - 关键步骤！
-
-回到你的 Worker 页面，点击 Settings -> Variables。
-
-A. 绑定 KV (必须做)
-
-找到 KV Namespace Bindings 区域。
-
-点击 Add Binding。
-
-Variable name 必须填：kv (小写，不要改名)。
-
-KV Namespace 选择你刚才创建的 KEEP_ALIVE_DB。
-
-点击 Deploy。
-
-B. 添加环境变量 (Environment Variables)
-
-点击 Add Variable 添加以下变量：
-
-变量名
-
-是否必填
-
-示例值
-
-说明
-
-TOKEN
-
-✅ 必填
-
-ghp_xxxx...
-
-第一步获取的 GitHub Token
-
-REPOS
-
-✅ 必填
-
-[{"owner":"..."...}]
-
-第一步整理的项目 JSON 字符串
-
-TIME
-
-❌ 选填
-
-40-60
-
-随机触发的天数区间，默认 40-60
-
-TG_TOKEN
-
-❌ 选填
-
-123456:ABC...
-
-Telegram Bot Token (若需要通知)
-
-TG_ID
-
-❌ 选填
-
-12345678
-
-Telegram Chat ID (若需要通知)
-
-提示：REPOS 的值必须是合法的 JSON，如果填错会导致脚本运行失败。
-
-⏰ 第三步：设置定时任务 (Triggers)
-
-为了让脚本能每天检查“是不是到日子了”，我们需要设置一个勤快点的闹钟。
-
-在 Worker 页面点击 Triggers 选项卡。
-
-找到 Cron Triggers。
-
-点击 Add Cron Trigger。
-
-Cron Expression 建议设置为每天一次，例如：
-
-0 9 * * * (每天上午 9 点运行)
-
-点击 Add Trigger。
-
-❓ 常见问题
-
-Q: 为什么 Cron 设置每天运行，会不会占用太多配额？
-A: 不会。Cloudflare Worker 每天有 10 万次免费请求额度。
-脚本每天醒来一次，只是读一下 KV 里的时间戳（极快，耗时几毫秒）。只有当随机生成的日子到了（例如第 50 天），它才会真正去请求 GitHub API。绝大部分时间它都是“醒来看看时间 -> 继续睡”，资源消耗几乎为零。
-
-Q: 如何获取 Telegram Bot Token 和 ID？
-A:
-
-Token: 在 Telegram 搜索 @BotFather，发送 /newbot 创建机器人，它会给你 Token。
-
-ID: 在 Telegram 搜索 @userinfobot，点击 Start，它会返回你的 ID。
-
-Q: 第一次部署后怎么没反应？
-A:
-
-第一次运行时，因为 KV 里没有记录，脚本会默认立即运行一次保活任务，并生成下一次的随机时间。
-
-你可以点击 Worker 界面右上角的 Deploy 旁边的下拉菜单 -> Triggers -> 手动访问那个 URL 来测试一次。
+```
+> 💡 提示：建议在本地整理好后**压缩为一行**，方便后续粘贴到环境变量中。
+
+## ☁️ 第二步：部署 Cloudflare Worker
+完成基础信息准备后，开始在 Cloudflare 平台部署 Worker 脚本。
+
+### 1. 创建并编写 Worker 代码
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
+2. 左侧菜单 → **Workers & Pages**
+3. 点击 **Create Application** → **Create Worker** → 先点击**Deploy**创建默认Worker
+4. 进入 Worker 编辑页，点击 **Edit code**
+5. 将提供的 `worker.js` 代码**全量复制**，覆盖编辑器中的默认代码
+6. 点击右上角 **Deploy** 保存代码
+
+### 2. 创建 KV 存储（用于记忆随机运行时间）
+为实现「指定区间随机运行」，需通过 KV 存储持久化「下一次运行时间戳」，步骤如下：
+1. 回到 Cloudflare 主面板，左侧菜单 → **Storage & Databases** → **KV**
+2. 点击 **Create Namespace**
+3. 自定义命名空间名称（例：`KEEP_ALIVE_DB`），点击 **Add** 完成创建
+
+### 3. 配置 Worker 绑定与环境变量（关键步骤）
+回到你的 Worker 页面，点击 **Settings** → **Variables**，分两步配置：
+
+#### A. 绑定 KV 命名空间（必须配置）
+1. 找到 **KV Namespace Bindings** 区域，点击 **Add Binding**
+2. **Variable name**：**必须填写 `kv`**（小写，不可修改，与脚本内变量对应）
+3. **KV Namespace**：选择上一步创建的 KV 命名空间（例：`KEEP_ALIVE_DB`）
+4. 点击 **Deploy** 保存绑定
+
+#### B. 添加环境变量
+点击 **Add Variable**，按以下表格添加变量，**必填项必须填写**，选填项按需配置：
+
+| 变量名   | 是否必填 | 示例值                | 说明                                                                 |
+|----------|----------|-----------------------|----------------------------------------------------------------------|
+| `TOKEN`  | ✅ 是    | `ghp_xxxxxxxxx`       | 第一步获取的 GitHub 个人访问令牌                                     |
+| `REPOS`  | ✅ 是    | `[{"owner":"test",...}]` | 第一步整理的保活项目 JSON 字符串（**需压缩为一行，保证格式合法**） |
+| `TIME`   | ❌ 否    | `40-60`               | 随机触发的天数区间，默认值 `40-60`，可自定义（例：`30-50`）|
+| `TG_TOKEN` | ❌ 否  | `123456:ABCdefxxxx`   | Telegram 机器人 Token（需要TG通知时填写）|
+| `TG_ID`  | ❌ 否    | `12345678`            | Telegram 聊天ID（需要TG通知时填写，与TG_TOKEN配套使用）|
+
+> 💡 重要提示：`REPOS` 为核心变量，**必须是合法的 JSON 字符串**，格式错误会导致脚本运行失败。
+
+## ⏰ 第三步：设置 Worker 定时触发器（Triggers）
+脚本需每日检查「是否到达运行时间」，因此需配置 Cron 触发器实现定时执行，步骤如下：
+1. 回到 Worker 页面，点击 **Triggers** 选项卡
+2. 找到 **Cron Triggers** 区域，点击 **Add Cron Trigger**
+3. **Cron Expression**：建议设置**每天一次**，示例（可自定义时区）：
+   ```bash
+   0 9 * * *  # 每天上午9点执行（Cloudflare 默认 UTC 时区，需注意本地时间转换）
+   ```
+4. 点击 **Add Trigger** 完成配置
+
+## ❓ 常见问题
+### Q：为什么 Cron 设置每天运行，会不会占用太多 Cloudflare 免费配额？
+A：完全不会。Cloudflare Worker 提供**每日10万次免费请求额度**，脚本执行逻辑为：
+每日仅轻量读取 KV 中的时间戳（耗时几毫秒，无实际资源消耗），**仅当到达随机生成的运行日期**（如第50天），才会调用 GitHub API 执行保活操作。绝大部分时间脚本都是「检查时间 → 继续休眠」，资源消耗几乎为0。
+
+### Q：如何获取 Telegram Bot Token 和 Chat ID？
+A：两步即可获取，全程免费：
+1. **TG_TOKEN**：在 Telegram 搜索 **@BotFather**，发送 `/newbot` 按提示创建机器人，创建成功后会返回机器人 Token
+2. **TG_ID**：在 Telegram 搜索 **@userinfobot**，点击 **Start**，机器人会直接返回你的个人 Chat ID
+
+### Q：第一次部署后脚本没反应，如何测试？
+A：首次运行时，因 KV 中无任何时间记录，脚本会**默认立即执行一次保活任务**，并生成下一次随机运行时间。手动测试方法：
+进入 Worker 界面 → 右上角 **Deploy** 旁的下拉菜单 → **Triggers** → 复制 Worker 访问 URL → 在浏览器中直接访问该 URL，即可触发一次脚本运行。
+
+---
+> 📌 小提示：可在 Cloudflare Worker 日志中查看脚本运行状态，排查执行异常问题。
